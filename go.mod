@@ -1,4 +1,4 @@
-module essay_question_api
+module writify_api
 
 go 1.20
 

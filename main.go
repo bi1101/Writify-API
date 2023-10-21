@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -119,25 +122,81 @@ func handleRequest(promptFile string) http.HandlerFunc {
 				panic(err)
 			}
 		}
-
 	}
+}
+
+func logMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	logger := log.New(os.Stdout, " [ESSAY_QUESTION_API] ", log.Ldate|log.Ltime)
+	return func(w http.ResponseWriter, r *http.Request) {
+		rl := NewCustomWriter(w)
+		next.ServeHTTP(rl, r)
+		logger.Printf("Status: [%v] Method: [%v] Path: [%v]", rl.status, r.Method, r.URL.Path)
+	}
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "OPTIONS, GET, POST")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept, TOKEN")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+type CustomWriter struct {
+	status int
+
+	http.ResponseWriter
+}
+
+func NewCustomWriter(w http.ResponseWriter) *CustomWriter {
+	return &CustomWriter{
+		status:         200,
+		ResponseWriter: w,
+	}
+}
+
+func (c CustomWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := c.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijack not supported")
+	}
+	return h.Hijack()
+}
+
+func (c CustomWriter) Flush() {
+	h, ok := c.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	h.Flush()
+}
+
+func (c *CustomWriter) WriteHeader(statusCode int) {
+	c.status = statusCode
+	c.ResponseWriter.WriteHeader(statusCode)
 }
 
 func main() {
 
-	http.HandleFunc("/ask", handleRequest("prompts/ask_prompt.txt"))
-	http.HandleFunc("/vocabulary-upgrade", handleRequest("prompts/vocabulary-upgrade-prompt.txt"))
-	http.HandleFunc("/grammar-correction", handleRequest("prompts/grammar-correction-prompt.txt"))
-	http.HandleFunc("/improved-task-2", handleRequest("prompts/improved-task-2-prompt.txt"))
-	http.HandleFunc("/improved-task-1", handleRequest("prompts/improved-task-1-prompt.txt"))
-	http.HandleFunc("/task-response", handleRequest("prompts/task-response-prompt.txt"))
-	http.HandleFunc("/task-achievement", handleRequest("prompts/task-achievement-prompt.txt"))
-	http.HandleFunc("/coherence-cohesion", handleRequest("prompts/coherence-cohesion-prompt.txt"))
-	http.HandleFunc("/lexical-resource", handleRequest("prompts/lexical-resource-prompt.txt"))
-	http.HandleFunc("/grammatical-range-accuracy", handleRequest("prompts/grammatical-range-accuracy-prompt.txt"))
-	http.HandleFunc("/essay-outline", handleRequest("prompts/essay-outline-prompt.txt"))
-	http.HandleFunc("/topic-vocabulary", handleRequest("prompts/topic-vocabulary-prompt.txt"))
-	http.HandleFunc("/topic-analysis", handleRequest("prompts/topic-analysis-prompt.txt"))
+	http.HandleFunc("/ask", logMiddleware(corsMiddleware(handleRequest("prompts/ask_prompt.txt"))))
+	http.HandleFunc("/vocabulary-upgrade", logMiddleware(corsMiddleware(handleRequest("prompts/vocabulary-upgrade-prompt.txt"))))
+	http.HandleFunc("/grammar-correction", logMiddleware(corsMiddleware(handleRequest("prompts/grammar-correction-prompt.txt"))))
+	http.HandleFunc("/improved-task-2", logMiddleware(corsMiddleware(handleRequest("prompts/improved-task-2-prompt.txt"))))
+	http.HandleFunc("/improved-task-1", logMiddleware(corsMiddleware(handleRequest("prompts/improved-task-1-prompt.txt"))))
+	http.HandleFunc("/task-response", logMiddleware(corsMiddleware(handleRequest("prompts/task-response-prompt.txt"))))
+	http.HandleFunc("/task-achievement", logMiddleware(corsMiddleware(handleRequest("prompts/task-achievement-prompt.txt"))))
+	http.HandleFunc("/coherence-cohesion", logMiddleware(corsMiddleware(handleRequest("prompts/coherence-cohesion-prompt.txt"))))
+	http.HandleFunc("/lexical-resource", logMiddleware(corsMiddleware(handleRequest("prompts/lexical-resource-prompt.txt"))))
+	http.HandleFunc("/grammatical-range-accuracy", logMiddleware(corsMiddleware(handleRequest("prompts/grammatical-range-accuracy-prompt.txt"))))
+	http.HandleFunc("/essay-outline", logMiddleware(corsMiddleware(handleRequest("prompts/essay-outline-prompt.txt"))))
+	http.HandleFunc("/topic-vocabulary", logMiddleware(corsMiddleware(handleRequest("prompts/topic-vocabulary-prompt.txt"))))
+	http.HandleFunc("/topic-analysis", logMiddleware(corsMiddleware(handleRequest("prompts/topic-analysis-prompt.txt"))))
 
 	log.Printf("listening on :%v", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%v", port), nil); err != nil {
