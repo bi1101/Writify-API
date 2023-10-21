@@ -1,20 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -49,159 +47,102 @@ var port string
 func init() {
 	godotenv.Load()
 	port = os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 }
-
-func handleRequest(promptFile string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
-		token := r.Header.Get("TOKEN")
+func handleRequest(promptFile string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("TOKEN")
 
 		if strings.TrimSpace(token) == "" {
-			w.WriteHeader(http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Token is required"})
 			return
-		}
-
-		if r.ContentLength == 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(w, "Error %v", r)
-			}
-		}()
-
-		defer r.Body.Close()
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			panic(err)
 		}
 
 		var req AskRequest
-		if err := json.Unmarshal(data, &req); err != nil {
-			panic(err)
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+			return
 		}
 
 		switch req.Stream {
 		case true:
-			w.Header().Set("Content-Type", "text/event-stream")
-			flusher, ok := w.(http.Flusher)
-			if !ok {
-				panic(fmt.Errorf("webserver doesn't support hijacking!"))
-			}
-
-			for it := range askWithStream(promptFile, token, req) {
-				if it.err != nil {
-					panic(err)
+			c.Stream(func(w io.Writer) bool {
+				for it := range askWithStream(promptFile, token, req) {
+					if it.err != nil {
+						c.Error(it.err)
+						return false
+					}
+					resp := AskResponse{
+						Id:      it.Response.ID,
+						Object:  it.Response.Object,
+						Created: it.Response.Created,
+						Model:   it.Response.Model,
+						Choices: it.Response.Choices,
+					}
+					data, err := json.Marshal(resp)
+					if err != nil {
+						c.Error(err)
+						return false
+					}
+					fmt.Fprintf(w, "data: %v\n\n", string(data))
 				}
-				resp := AskResponse{
-					Id:      it.Response.ID,
-					Object:  it.Response.Object,
-					Created: it.Response.Created,
-					Model:   it.Response.Model,
-					Choices: it.Response.Choices,
-				}
-				data, err := json.Marshal(resp)
-				if err != nil {
-					panic(err)
-				}
-				fmt.Fprintf(w, "data: %v\n\n", string(data))
-				flusher.Flush()
-			}
+				return false
+			})
 		case false:
-			w.Header().Set("Content-Type", "application/json")
 			response, err := askWithoutStream(promptFile, token, req)
 			if err != nil {
-				panic(err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+				return
 			}
-			if err := json.NewEncoder(w).Encode(response); err != nil {
-				panic(err)
-			}
+			c.JSON(http.StatusOK, response)
 		}
 	}
 }
 
-func logMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func logMiddleware(c *gin.Context) {
 	logger := log.New(os.Stdout, " [ESSAY_QUESTION_API] ", log.Ldate|log.Ltime)
-	return func(w http.ResponseWriter, r *http.Request) {
-		rl := NewCustomWriter(w)
-		next.ServeHTTP(rl, r)
-		logger.Printf("Status: [%v] Method: [%v] Path: [%v]", rl.status, r.Method, r.URL.Path)
-	}
+	path := c.Request.URL.Path
+	method := c.Request.Method
+	c.Next()
+	statusCode := c.Writer.Status()
+	logger.Printf("Status: [%v] Method: [%v] Path: [%v]", statusCode, method, path)
 }
 
-func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "OPTIONS, GET, POST")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept, TOKEN")
+func corsMiddleware(c *gin.Context) {
+	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+	c.Writer.Header().Set("Access-Control-Allow-Methods", "OPTIONS, GET, POST")
+	c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept, TOKEN")
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	}
-}
-
-type CustomWriter struct {
-	status int
-
-	http.ResponseWriter
-}
-
-func NewCustomWriter(w http.ResponseWriter) *CustomWriter {
-	return &CustomWriter{
-		status:         200,
-		ResponseWriter: w,
-	}
-}
-
-func (c CustomWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := c.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, errors.New("hijack not supported")
-	}
-	return h.Hijack()
-}
-
-func (c CustomWriter) Flush() {
-	h, ok := c.ResponseWriter.(http.Flusher)
-	if !ok {
+	if c.Request.Method == http.MethodOptions {
+		c.AbortWithStatus(http.StatusNoContent)
 		return
 	}
-	h.Flush()
-}
-
-func (c *CustomWriter) WriteHeader(statusCode int) {
-	c.status = statusCode
-	c.ResponseWriter.WriteHeader(statusCode)
+	c.Next()
 }
 
 func main() {
+	r := gin.Default()
 
-	http.HandleFunc("/ask", logMiddleware(corsMiddleware(handleRequest("prompts/ask_prompt.txt"))))
-	http.HandleFunc("/vocabulary-upgrade", logMiddleware(corsMiddleware(handleRequest("prompts/vocabulary-upgrade-prompt.txt"))))
-	http.HandleFunc("/grammar-correction", logMiddleware(corsMiddleware(handleRequest("prompts/grammar-correction-prompt.txt"))))
-	http.HandleFunc("/improved-task-2", logMiddleware(corsMiddleware(handleRequest("prompts/improved-task-2-prompt.txt"))))
-	http.HandleFunc("/improved-task-1", logMiddleware(corsMiddleware(handleRequest("prompts/improved-task-1-prompt.txt"))))
-	http.HandleFunc("/task-response", logMiddleware(corsMiddleware(handleRequest("prompts/task-response-prompt.txt"))))
-	http.HandleFunc("/task-achievement", logMiddleware(corsMiddleware(handleRequest("prompts/task-achievement-prompt.txt"))))
-	http.HandleFunc("/coherence-cohesion", logMiddleware(corsMiddleware(handleRequest("prompts/coherence-cohesion-prompt.txt"))))
-	http.HandleFunc("/lexical-resource", logMiddleware(corsMiddleware(handleRequest("prompts/lexical-resource-prompt.txt"))))
-	http.HandleFunc("/grammatical-range-accuracy", logMiddleware(corsMiddleware(handleRequest("prompts/grammatical-range-accuracy-prompt.txt"))))
-	http.HandleFunc("/essay-outline", logMiddleware(corsMiddleware(handleRequest("prompts/essay-outline-prompt.txt"))))
-	http.HandleFunc("/topic-vocabulary", logMiddleware(corsMiddleware(handleRequest("prompts/topic-vocabulary-prompt.txt"))))
-	http.HandleFunc("/topic-analysis", logMiddleware(corsMiddleware(handleRequest("prompts/topic-analysis-prompt.txt"))))
+	r.Use(corsMiddleware)
+	r.Use(logMiddleware)
 
-	log.Printf("listening on :%v", port)
-	if err := http.ListenAndServe(fmt.Sprintf(":%v", port), nil); err != nil {
-		log.Fatal(err)
-	}
+	r.POST("/ask", handleRequest("prompts/ask_prompt.txt"))
+	r.POST("/vocabulary-upgrade", handleRequest("prompts/vocabulary-upgrade-prompt.txt"))
+	r.POST("/grammar-correction", handleRequest("prompts/grammar-correction-prompt.txt"))
+	r.POST("/improved-task-2", handleRequest("prompts/improved-task-2-prompt.txt"))
+	r.POST("/improved-task-1", handleRequest("prompts/improved-task-1-prompt.txt"))
+	r.POST("/task-response", handleRequest("prompts/task-response-prompt.txt"))
+	r.POST("/task-achievement", handleRequest("prompts/task-achievement-prompt.txt"))
+	r.POST("/coherence-cohesion", handleRequest("prompts/coherence-cohesion-prompt.txt"))
+	r.POST("/lexical-resource", handleRequest("prompts/lexical-resource-prompt.txt"))
+	r.POST("/grammatical-range-accuracy", handleRequest("prompts/grammatical-range-accuracy-prompt.txt"))
+	r.POST("/essay-outline", handleRequest("prompts/essay-outline-prompt.txt"))
+	r.POST("/topic-vocabulary", handleRequest("prompts/topic-vocabulary-prompt.txt"))
+	r.POST("/topic-analysis", handleRequest("prompts/topic-analysis-prompt.txt"))
+
+	r.Run(fmt.Sprintf(":%v", port))
 }
 
 type AnswerStream struct {
