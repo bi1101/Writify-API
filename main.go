@@ -51,7 +51,12 @@ func init() {
 	}
 }
 
-func handleRequest(promptFile string) gin.HandlerFunc {
+type handleRequestConfig struct {
+	underWordPromptFile string
+	wordLimit           int
+}
+
+func handleRequest(defaultPromptFile string, options ...*handleRequestConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 
@@ -74,11 +79,21 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 			return
 		}
 
+		if len(options) > 0 && options[0].wordLimit > 0 {
+			for _, message := range req.Messages {
+				wordCount := len(strings.Fields(message.Essay))
+				if wordCount < options[0].wordLimit {
+					defaultPromptFile = options[0].underWordPromptFile
+					break
+				}
+			}
+		}
+
 		switch req.Stream {
 		case true:
 			c.Stream(func(w io.Writer) bool {
 				c.Writer.Header().Set("Content-Type", "text/event-stream")
-				for it := range askWithStream(promptFile, token, req) {
+				for it := range askWithStream(defaultPromptFile, token, req) {
 					if it.err != nil {
 						c.Writer.Header().Set("Content-Type", "application/json")
 						c.JSON(http.StatusInternalServerError, gin.H{"error": it.err})
@@ -102,7 +117,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 				return false
 			})
 		case false:
-			response, err := askWithoutStream(promptFile, token, req)
+			response, err := askWithoutStream(defaultPromptFile, token, req)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 				return
@@ -135,8 +150,14 @@ func main() {
 	r.POST("/grammar-correction", handleRequest("prompts/grammar-correction-prompt.txt"))
 	r.POST("/improved-task-2", handleRequest("prompts/improved-task-2-prompt.txt"))
 	r.POST("/improved-task-1", handleRequest("prompts/improved-task-1-prompt.txt"))
-	r.POST("/task-response", handleRequest("prompts/task-response-prompt.txt"))
-	r.POST("/task-achievement", handleRequest("prompts/task-achievement-prompt.txt"))
+	r.POST("/task-response", handleRequest("prompts/task-response-prompt.txt", &handleRequestConfig{
+		underWordPromptFile: "prompts/task-response-UNDERWORD-prompt.txt",
+		wordLimit:           250,
+	}))
+	r.POST("/task-achievement", handleRequest("prompts/task-achievement-prompt.txt", &handleRequestConfig{
+		underWordPromptFile: "prompts/task-achievement-UNDERWORD-prompt.txt",
+		wordLimit:           150,
+	}))
 	r.POST("/coherence-cohesion", handleRequest("prompts/coherence-cohesion-prompt.txt"))
 	r.POST("/lexical-resource", handleRequest("prompts/lexical-resource-prompt.txt"))
 	r.POST("/grammatical-range-accuracy", handleRequest("prompts/grammatical-range-accuracy-prompt.txt"))
