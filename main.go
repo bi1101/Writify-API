@@ -76,10 +76,11 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 
 		switch req.Stream {
 		case true:
-			c.Writer.Header().Set("Content-Type", "text/event-stream")
 			c.Stream(func(w io.Writer) bool {
+				c.Writer.Header().Set("Content-Type", "text/event-stream")
 				for it := range askWithStream(promptFile, token, req) {
 					if it.err != nil {
+						c.Writer.Header().Set("Content-Type", "text/plain")
 						c.String(http.StatusInternalServerError, "Error %v", it.err)
 						return false
 					}
@@ -92,6 +93,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 					}
 					data, err := json.Marshal(resp)
 					if err != nil {
+						c.Writer.Header().Set("Content-Type", "text/plain")
 						c.String(http.StatusInternalServerError, "Error %v", err)
 						return false
 					}
@@ -102,7 +104,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 		case false:
 			response, err := askWithoutStream(promptFile, token, req)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 				return
 			}
 			c.Writer.Header().Set("Content-Type", "application/json")
