@@ -80,7 +80,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 			c.Stream(func(w io.Writer) bool {
 				for it := range askWithStream(promptFile, token, req) {
 					if it.err != nil {
-						c.Error(it.err)
+						c.String(http.StatusInternalServerError, "Error %v", it.err)
 						return false
 					}
 					resp := AskResponse{
@@ -92,7 +92,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 					}
 					data, err := json.Marshal(resp)
 					if err != nil {
-						c.Error(err)
+						c.String(http.StatusInternalServerError, "Error %v", err)
 						return false
 					}
 					fmt.Fprintf(w, "data: %v\n\n", string(data))
