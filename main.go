@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -51,14 +50,23 @@ func init() {
 		port = "8080"
 	}
 }
+
 func handleRequest(promptFile string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := c.GetHeader("TOKEN")
+		authHeader := c.GetHeader("Authorization")
 
-		if strings.TrimSpace(token) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Token is required"})
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
 			return
 		}
+
+		splitted := strings.Split(authHeader, " ")
+		if len(splitted) != 2 || strings.ToLower(splitted[0]) != "bearer" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format must be 'Bearer [TOKEN]'"})
+			return
+		}
+
+		token := splitted[1]
 
 		var req AskRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -68,6 +76,7 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 
 		switch req.Stream {
 		case true:
+			c.Writer.Header().Set("Content-Type", "text/event-stream")
 			c.Stream(func(w io.Writer) bool {
 				for it := range askWithStream(promptFile, token, req) {
 					if it.err != nil {
@@ -96,18 +105,10 @@ func handleRequest(promptFile string) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 				return
 			}
+			c.Writer.Header().Set("Content-Type", "application/json")
 			c.JSON(http.StatusOK, response)
 		}
 	}
-}
-
-func logMiddleware(c *gin.Context) {
-	logger := log.New(os.Stdout, " [ESSAY_QUESTION_API] ", log.Ldate|log.Ltime)
-	path := c.Request.URL.Path
-	method := c.Request.Method
-	c.Next()
-	statusCode := c.Writer.Status()
-	logger.Printf("Status: [%v] Method: [%v] Path: [%v]", statusCode, method, path)
 }
 
 func corsMiddleware(c *gin.Context) {
@@ -126,7 +127,6 @@ func main() {
 	r := gin.Default()
 
 	r.Use(corsMiddleware)
-	r.Use(logMiddleware)
 
 	r.POST("/ask", handleRequest("prompts/ask_prompt.txt"))
 	r.POST("/vocabulary-upgrade", handleRequest("prompts/vocabulary-upgrade-prompt.txt"))
