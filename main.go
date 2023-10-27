@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -140,6 +141,13 @@ func corsMiddleware(c *gin.Context) {
 	c.Next()
 }
 
+// You can use that in the .env file at the moment they are just hard coded
+// values here for testing purposes.
+var (
+	certFile string = "/etc/letsencrypt/live/ieltsscience.fun/fullchain.pem"
+	keyFile  string = "/etc/letsencrypt/live/ieltsscience.fun/privkey.pem"
+)
+
 func main() {
 	r := gin.Default()
 
@@ -165,7 +173,9 @@ func main() {
 	r.POST("/topic-vocabulary", handleRequest("prompts/topic-vocabulary-prompt.txt"))
 	r.POST("/topic-analysis", handleRequest("prompts/topic-analysis-prompt.txt"))
 
-	r.Run(fmt.Sprintf(":%v", port))
+	if err := http.ListenAndServeTLS(fmt.Sprintf(":%v", port), certFile, keyFile, r); err != nil {
+		log.Fatal(err)
+	}
 }
 
 type AnswerStream struct {
