@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -41,11 +42,17 @@ type AskResponse struct {
 	Choices any    `json:"choices"`
 }
 
-var port string
+var (
+	port     string
+	certFile string
+	keyFile  string
+)
 
 func init() {
 	godotenv.Load()
 	port = os.Getenv("PORT")
+	certFile = os.Getenv("CERT_FILE")
+	keyFile = os.Getenv("KEY_FILE")
 	if port == "" {
 		port = "8080"
 	}
@@ -165,7 +172,10 @@ func main() {
 	r.POST("/topic-vocabulary", handleRequest("prompts/topic-vocabulary-prompt.txt"))
 	r.POST("/topic-analysis", handleRequest("prompts/topic-analysis-prompt.txt"))
 
-	r.Run(fmt.Sprintf(":%v", port))
+	log.Printf("listening on %v", port)
+	if err := http.ListenAndServeTLS(fmt.Sprintf(":%v", port), certFile, keyFile, r); err != nil {
+		log.Fatal(err)
+	}
 }
 
 type AnswerStream struct {
