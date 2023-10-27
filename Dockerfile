@@ -11,7 +11,7 @@ COPY . .
 RUN go mod download
 
 # Build the Go app for production.
-RUN go build -o main .
+RUN go build
 
 # Make the port 8080 available outside of the Docker container.
 EXPOSE 8080
@@ -20,4 +20,4 @@ EXPOSE 8080
 # Example: ENV PORT 8080
 
 # Command to run the application.
-CMD ["./main"]
+CMD ["./writify_api"]
