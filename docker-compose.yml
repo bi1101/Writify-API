@@ -13,3 +13,5 @@ services:
       - CERT_FILE=fullchain.pem
       - KEY_FILE=privkey.pem
       # Add other environment variables as needed
+    volumes:
+      - ./prompts:/go/src/app/prompts
