@@ -42,11 +42,17 @@ type AskResponse struct {
 	Choices any    `json:"choices"`
 }
 
-var port string
+var (
+	port     string
+	certFile string
+	keyFile  string
+)
 
 func init() {
 	godotenv.Load()
 	port = os.Getenv("PORT")
+	certFile = os.Getenv("CERT_FILE")
+	keyFile = os.Getenv("KEY_FILE")
 	if port == "" {
 		port = "8080"
 	}
@@ -141,13 +147,6 @@ func corsMiddleware(c *gin.Context) {
 	c.Next()
 }
 
-// You can use that in the .env file at the moment they are just hard coded
-// values here for testing purposes.
-var (
-	certFile string = "/etc/letsencrypt/live/ieltsscience.fun/fullchain.pem"
-	keyFile  string = "/etc/letsencrypt/live/ieltsscience.fun/privkey.pem"
-)
-
 func main() {
 	r := gin.Default()
 
@@ -173,6 +172,7 @@ func main() {
 	r.POST("/topic-vocabulary", handleRequest("prompts/topic-vocabulary-prompt.txt"))
 	r.POST("/topic-analysis", handleRequest("prompts/topic-analysis-prompt.txt"))
 
+	log.Printf("listening on %v", port)
 	if err := http.ListenAndServeTLS(fmt.Sprintf(":%v", port), certFile, keyFile, r); err != nil {
 		log.Fatal(err)
 	}
